@@ -1,0 +1,701 @@
+// Foodics Clone - Prisma Schema
+// Restaurant POS Database
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============== AUTH ==============
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  password    String
+  name        String
+  role        String   @default("CASHIER")
+  phone       String?
+  avatar      String?
+  isActive    Boolean  @default(true)
+  branchId    String?
+  branch      Branch?  @relation(fields: [branchId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  orders      Order[]
+  sessions    Session[]
+  createdRecipes Recipe[] @relation("RecipeCreator")
+  receivedPayments Payment[] @relation("ReceivedPayments")
+  processedRefunds Refund[] @relation("RefundedBy")
+  shifts      Shift[]
+  auditLogs   AuditLog[] @relation("AuditActor")
+  createdAggregators Aggregator[] @relation("AggregatorCreator")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ============== BRANCH ==============
+model Branch {
+  id        String   @id @default(uuid())
+  name      String
+  nameAr    String?
+  address   String?
+  phone     String?
+  isActive  Boolean  @default(true)
+  /// F-I: tax rate for DINE_IN orders at this branch (0.0 → 1.0).
+  /// Defaults to 12% if not set (matches the original hardcoded value).
+  taxRateDineIn Float   @default(0.12)
+  /// F-I: tax rate for TAKEAWAY orders (usually 0, but configurable)
+  taxRateTakeaway Float @default(0)
+  /// F-I: tax rate for DELIVERY orders (usually 0)
+  taxRateDelivery Float  @default(0)
+  /// Business hours (24h format, e.g. "14:00" → 05:00 for an overnight business day).
+  /// Defaults match the historical hardcoded values in orderController.
+  businessDayStartHour Int @default(14)
+  businessDayEndHour   Int @default(5)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users     User[]
+  tables    Table[]
+  orders    Order[]
+  suppliers Supplier[]
+  customers Customer[]
+  shifts     Shift[]
+  aggregators Aggregator[]
+}
+
+// ============== CUSTOMER (P1.3) ==============
+model Customer {
+  id           String   @id @default(uuid())
+  name         String
+  phone        String   @unique
+  address      String?
+  notes        String?
+  outstanding  Float    @default(0)
+  totalSpent   Float    @default(0)
+  ordersCount  Int      @default(0)
+  lastOrderAt  DateTime?
+  branchId     String?
+  branch       Branch?  @relation(fields: [branchId], references: [id])
+  isActive     Boolean  @default(true)
+  orders       Order[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([phone])
+  @@index([outstanding])
+  @@index([branchId, isActive])
+}
+
+// ============== MENU ==============
+model Category {
+  id        String    @id @default(uuid())
+  name      String
+  nameAr    String?
+  image     String?
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  products  Product[]
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  nameAr      String?
+  description String?
+  image       String?
+  price       Float
+  cost        Float    @default(0)
+  sku         String?  @unique
+  barcode     String?
+  isActive    Boolean  @default(true)
+  isAvailable Boolean   @default(true)
+  /// F-D: when set, the product is hidden from POS until this timestamp expires
+  /// (then `isAvailable` is automatically restored). Use for "ran out for 30 mins" etc.
+  outOfStockUntil DateTime?
+  sortOrder   Int      @default(0)
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  ingredients ProductIngredient[]
+  recipe      Recipe[]
+  variants    ProductVariant[]
+  modifierGroups ProductModifierGroup[]
+  orderItems  OrderItem[]
+  inventory   Inventory?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([categoryId, isActive, isAvailable])
+  @@index([name])
+  @@index([nameAr])
+  @@index([barcode])
+  @@index([outOfStockUntil])
+}
+
+/// أحجام/أنواع الصنف (مثال: 3 قطع، 5 قطع، نص كيلو، كيلو)
+model ProductVariant {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label     String
+  labelAr   String?
+  price     Float
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, isActive, sortOrder])
+}
+
+/// مجموعات الإضافات الاختيارية على الصنف (مثال: نوع العيش، الصوصات، إضافات جبن)
+model ProductModifierGroup {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name      String
+  nameAr    String?
+  /// SINGLE (radio) | MULTI (checkbox)
+  type      String   @default("SINGLE")
+  required  Boolean  @default(false)
+  minSelect Int      @default(0)
+  maxSelect Int      @default(1)
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  options   ModifierOption[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, isActive, sortOrder])
+}
+
+model ModifierOption {
+  id        String   @id @default(uuid())
+  groupId   String
+  group     ProductModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  label     String
+  labelAr   String?
+  /// فرق السعر عن سعر الصنف الأساسي (يمكن يكون سالب)
+  priceDelta Float   @default(0)
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([groupId, isActive, sortOrder])
+}
+
+// ============== INGREDIENTS (Raw materials) ==============
+model Ingredient {
+  id        String   @id @default(uuid())
+  name      String
+  nameAr    String?
+  unit      String   // kg | g | l | ml | pcs
+  stock     Float    @default(0)
+  minStock  Float    @default(0)
+  cost      Float    @default(0)
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  products  ProductIngredient[]
+  recipe     Recipe[]
+  movements  InventoryMovement[]
+  invoiceItems SupplierInvoiceItem[]
+}
+
+model ProductIngredient {
+  id           String     @id @default(uuid())
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  quantity     Float
+
+  @@unique([productId, ingredientId])
+}
+
+// ============== RECIPE (Bom-style for prepared dishes) ==============
+model Recipe {
+  id           String     @id @default(uuid())
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  quantity     Float
+  createdById  String?
+  createdBy    User?      @relation("RecipeCreator", fields: [createdById], references: [id])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([productId, ingredientId])
+}
+
+// ============== TABLES ==============
+model Table {
+  id        String   @id @default(uuid())
+  number    String
+  capacity  Int      @default(4)
+  status    String   @default("AVAILABLE")
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  orders    Order[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([branchId, number])
+  @@index([branchId, status])
+}
+
+// ============== ORDERS ==============
+model Order {
+  id            String      @id @default(uuid())
+  orderNumber   String      @unique
+  status        String      @default("PENDING")
+  type          String      @default("DINE_IN")
+  customerName  String?
+  customerPhone String?
+  customerAddress String?
+  notes         String?
+  subtotal      Float       @default(0)
+  tax           Float       @default(0)
+  discount      Float       @default(0)
+  deliveryFee   Float       @default(0)
+  /// F-E: customer tip (بقشيش) — collected alongside the order total but
+  /// flows to the cashier, not the restaurant. We track it separately so
+  /// revenue reports can exclude it.
+  tip           Float       @default(0)
+  paidAmount    Float       @default(0)
+  total         Float       @default(0)
+  paymentMethod String?
+  paymentStatus String      @default("UNPAID")
+  branchId      String
+  branch        Branch      @relation(fields: [branchId], references: [id])
+  tableId       String?
+  table         Table?      @relation(fields: [tableId], references: [id])
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  items         OrderItem[]
+  deliveryOptions OrderDeliveryOption[]
+  payments      Payment[]
+  refunds       Refund[]
+  /// Webhook logs that resulted in this order (typically just one)
+  webhookLogs   AggregatorWebhookLog[]
+  /// Soft link to Customer (added in P1.3) — null until linked to a customer record
+  customerId    String?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  /// Aggregator integration (Otiob Masr, Talabat, elmenus, etc.)
+  /// When set, the order came from a delivery platform via webhook.
+  /// The (aggregatorId, externalOrderId) pair is unique so retries don't duplicate.
+  aggregatorId     String?
+  aggregator       Aggregator? @relation(fields: [aggregatorId], references: [id])
+  /// External order ID from the aggregator (e.g. "OTL-123456")
+  externalOrderId  String?
+  /// Original JSON payload from the aggregator, kept for audit/debugging.
+  /// We don't parse it again — just store it so support can see what came in.
+  aggregatorPayload String?
+  /// Cashier who approved/rejected the aggregator order. Null until acted on.
+  aggregatorActionById String?
+  aggregatorActionAt   DateTime?
+  /// 'NONE' | 'APPROVED' | 'REJECTED' — when the cashier reviews the incoming order.
+  /// An order from an aggregator is "PENDING" status but also has aggregatorAction='NONE'
+  /// until the cashier clicks approve/reject. We keep them separate so the original
+  /// order status is preserved through the workflow.
+  aggregatorAction     String? @default("NONE")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  completedAt   DateTime?
+
+  // Indexes for high-volume queries (300+ orders/day)
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([paymentStatus, createdAt])
+  @@index([branchId, createdAt])
+  @@index([userId, createdAt])
+  @@index([tableId])
+  @@index([type, createdAt])
+  @@index([completedAt])
+  @@index([customerId])
+  @@index([customerPhone])
+  @@index([aggregatorId, createdAt])
+  @@index([aggregatorAction])
+  // Unique constraint for idempotency: same (aggregator, externalId) only once.
+  // We allow null externalOrderId (e.g. POS-created orders) — Prisma treats null as distinct.
+  @@unique([aggregatorId, externalOrderId])
+}
+
+/// سجل دفعة واحدة في أوردر (يدعم الدفع المتعدد)
+model Payment {
+  id            String   @id @default(uuid())
+  orderId       String
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// طريقة الدفع: CASH, CARD, INSTAPAY, VODAFONE_CASH, FAWRY, OTHER
+  method        String
+  amount        Float
+  /// F-E: tip portion of this payment. Sum(amount) across payments == Order.paidAmount
+  /// (tip is included in the total collected from the customer).
+  tip           Float   @default(0)
+  /// مرجع/رقم العملية (اختياري) - مثل رقم الإيصال
+  reference     String?
+  notes         String?
+  /// اسم الدافع (اختياري) - مفيد لما 2 عملاء يدفعوا
+  payerName     String?
+  receivedById  String
+  receivedBy    User     @relation("ReceivedPayments", fields: [receivedById], references: [id])
+  /// Soft-delete marker (set by Refund flow when this payment was rolled back).
+  refundedAt    DateTime?
+  refundReason  String?
+  refunds       Refund[]
+  createdAt     DateTime @default(now())
+
+  @@index([orderId])
+  @@index([method, createdAt])
+  @@index([receivedById, createdAt])
+  @@index([createdAt])
+}
+
+
+// ============== SHIFT (P1.4) ==============
+/// شيفت الكاشير — لما يبدأ الشيفت بيدخل opening float (الكاش في الدرج)
+/// ولما يقفله بيدخل actual count والـ system بيحسب expected vs actual.
+model Shift {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  branchId      String
+  branch        Branch   @relation(fields: [branchId], references: [id])
+  /// المبلغ الابتدائي في الدرج (كاش) — entering float
+  openingFloat  Float    @default(0)
+  openedAt      DateTime @default(now())
+  /// المبلغ الفعلي اللي عدّه الكاشير في الدرج عند الإغلاق
+  closingFloat  Float?
+  closedAt      DateTime?
+  /// الفرق (positive = زيادة، negative = عجز) — يُحسب عند الإغلاق
+  difference    Float?
+  notes         String?
+  /// 'OPEN' = شيفت فعّال، 'CLOSED' = متقفل
+  status        String   @default("OPEN")
+
+  @@index([userId, openedAt])
+  @@index([branchId, status])
+  @@index([status, openedAt])
+}
+
+/// سجل استرداد (Refund) — يربط دفعة بعملية ردّ الفلوس للعميل
+/// (إلغاء أوردر بعد الدفع، أو تصحيح خطأ في الكاشير).
+/// كل Refund يخص دفعة واحدة (Payment) — لو أوردر اتدفع بـ 3 دفعات split
+/// ممكن يكون فيه 3 Refund records منفصلة، كل واحد يخص دفعة.
+model Refund {
+  id            String   @id @default(uuid())
+  paymentId     String
+  payment       Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  orderId       String
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// المبلغ المسترد — لازم <= payment.amount
+  amount        Float
+  /// طريقة ردّ الفلوس: CASH, CARD, INSTAPAY, STORE_CREDIT
+  method        String
+  /// سبب الاسترداد (إلغاء أوردر / خطأ في الطلب / شكوى عميل / ...)
+  reason        String
+  /// رقم مرجعي للردّ (رقم العملية في POS البنك مثلاً)
+  reference     String?
+  processedById String
+  processedBy   User     @relation("RefundedBy", fields: [processedById], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@index([paymentId])
+  @@index([orderId, createdAt])
+  @@index([processedById, createdAt])
+  @@index([createdAt])
+}
+
+// ============== AUDIT LOG (P2.3) ==============
+/// كل تغيير على فلوس (payments, refunds, expenses, shift close) بيتسجل هنا
+/// عشان نعرف مين عمل إيه وإمتى — مفيد جداً لما يكون فيه اختلاف في الكاش.
+///
+// action: 'PAYMENT_CREATE' | 'PAYMENT_REMOVE' | 'REFUND_CREATE' | 'REFUND_REMOVE'
+//         | 'EXPENSE_CREATE' | 'EXPENSE_UPDATE' | 'EXPENSE_REMOVE'
+//         | 'SHIFT_OPEN' | 'SHIFT_CLOSE' | 'ORDER_CANCEL' | 'ORDER_EDIT'
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation("AuditActor", fields: [userId], references: [id])
+  action      String
+  /// الكيان اللي اتأثر (Payment, Refund, Order, Expense, Shift, Customer)
+  entityType  String
+  entityId    String
+  /// JSON snapshot — فيه القيم القديمة والجديدة
+  metadata    String?  // stringified JSON
+  /// Optional human-readable note (e.g. "cancelled order #23")
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@index([action, createdAt])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+  /// الفاريانت المختار (مثلاً 5 قطع بدل 3)
+  variantId String?
+  /// اسم الفاريانت محفوظ كـ snapshot عشان لو اتغير بعدين ميتأثرش
+  variantLabel String?
+  /// الإضافات المختارة (snapshot JSON): [{ groupId, groupName, optionId, optionLabel, priceDelta }]
+  /// Stored as stringified JSON because SQLite doesn't have native JSON
+  modifiers  String?
+  quantity   Int      @default(1)
+  /// سعر الوحدة بعد الفاريانت + الإضافات
+  price      Float
+  notes      String?
+  status     String   @default("PENDING")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([productId, createdAt])
+  @@index([status])
+}
+
+// ============== DELIVERY OPTIONS ==============
+model DeliveryOption {
+  id          String   @id @default(uuid())
+  name        String
+  nameAr      String
+  description String?
+  /// Default fee shown to the cashier. If `allowCustomFee` is true, this is just
+  /// a pre-filled suggestion — the cashier can override it at order time.
+  fee         Float    @default(0)
+  /// When true, the POS shows an input next to this option so the cashier can
+  /// enter a custom value (e.g. for "التوصيل حسب المنطقة" where the fee depends
+  /// on distance, or for special cases). The fee is clamped to [minFee, maxFee]
+  /// if those are set, otherwise any non-negative value is accepted.
+  allowCustomFee Boolean @default(false)
+  /// Optional lower bound for the custom fee. null = no minimum.
+  minFee     Float?
+  /// Optional upper bound for the custom fee. null = no maximum.
+  maxFee     Float?
+  isActive    Boolean  @default(true)
+  orders      OrderDeliveryOption[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model OrderDeliveryOption {
+  id               String         @id @default(uuid())
+  orderId          String
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  deliveryOptionId String
+  deliveryOption   DeliveryOption @relation(fields: [deliveryOptionId], references: [id])
+  fee              Float
+  createdAt        DateTime       @default(now())
+}
+
+// ============== SUPPLIERS ==============
+model Supplier {
+  id        String   @id @default(uuid())
+  name      String
+  nameAr    String?
+  phone     String?
+  email     String?
+  address   String?
+  notes     String?
+  isActive  Boolean  @default(true)
+  branchId  String?
+  branch    Branch?  @relation(fields: [branchId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  invoices  SupplierInvoice[]
+  ingredients Ingredient[]
+  expenses  Expense[]
+}
+
+// ============== SUPPLIER INVOICES ==============
+model SupplierInvoice {
+  id          String   @id @default(uuid())
+  number      String
+  supplierId  String
+  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  branchId    String?
+  amount      Float
+  paid        Float    @default(0)
+  status      String   @default("UNPAID") // UNPAID | PARTIAL | PAID
+  date        DateTime @default(now())
+  dueDate     DateTime?
+  notes       String?
+  items       SupplierInvoiceItem[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SupplierInvoiceItem {
+  id           String          @id @default(uuid())
+  invoiceId    String
+  invoice      SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  ingredientId String?
+  ingredient   Ingredient?     @relation(fields: [ingredientId], references: [id])
+  description  String
+  quantity     Float
+  unit         String
+  unitPrice    Float
+  total        Float
+  createdAt    DateTime        @default(now())
+}
+
+// ============== INVENTORY ==============
+model Inventory {
+  id         String   @id @default(uuid())
+  productId  String   @unique
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stock      Float    @default(0)
+  minStock   Float    @default(5)
+  unit       String   @default("pcs")
+  updatedAt  DateTime @updatedAt
+}
+
+model InventoryMovement {
+  id           String     @id @default(uuid())
+  type         String     // IN | OUT | ADJUSTMENT
+  quantity     Float
+  reason       String?
+  productId    String?
+  ingredientId String?
+  ingredient   Ingredient? @relation(fields: [ingredientId], references: [id])
+  userId       String?
+  createdAt    DateTime   @default(now())
+
+  @@index([productId, createdAt])
+  @@index([ingredientId, createdAt])
+  @@index([type, createdAt])
+  @@index([createdAt])
+}
+
+// ============== EXPENSES ==============
+model Expense {
+  id            String   @id @default(uuid())
+  category      String
+  description   String
+  amount        Float
+  /// CASH, CARD, INSTAPAY, BANK_TRANSFER, CHEQUE
+  paymentMethod String   @default("CASH")
+  /// Link to supplier (if this expense is a payment TO a supplier) — optional
+  supplierId    String?
+  supplier      Supplier? @relation(fields: [supplierId], references: [id])
+  /// Reference number (bank transfer ref, cheque number, etc.)
+  reference     String?
+  date          DateTime @default(now())
+  branchId      String?
+  userId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([date])
+  @@index([branchId, date])
+  @@index([supplierId])
+  @@index([paymentMethod])
+}
+
+// ============== SETTINGS ==============
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// ============== AGGREGATORS (delivery platforms) ==============
+/// تمثيل لمنصة توصيل (طلبات مصر، talabat، elmenus، ..).
+/// كل منصة ليها:
+///   - code: المعرّف في الـ URL (مثل /api/webhooks/aggregators/:code)
+///   - webhookSecret: سرّ HMAC للتحقق من إن الـ request جاي فعلاً منهم
+///   - fieldMapping: إزاي نحوّل JSON بتاعهم لـ format الـ internal
+///
+/// الـ fieldMapping هو JSON object فيه dot-notation paths:
+///   {
+///     "externalOrderId": "order_id",
+///     "customerName": "customer.name",
+///     "customerPhone": "customer.phone",
+///     "items": "items",
+///     "itemSku": "sku",
+///     ...
+///   }
+///
+/// لو الـ path مش موجود في الـ payload، الحقل بيتسجل null والـ cashier يتعامل.
+model Aggregator {
+  id            String   @id @default(uuid())
+  name          String
+  /// URL-safe code, used in /api/webhooks/aggregators/:code
+  code          String   @unique
+  /// Optional HMAC secret. When set, incoming webhooks must include
+  /// `X-Aggregator-Signature: sha256=<hmac-of-body>` header.
+  webhookSecret String?
+  /// JSON string of the field mapping (dot-notation paths into the payload)
+  fieldMapping  String
+  isActive      Boolean  @default(true)
+  branchId      String?
+  branch        Branch?  @relation(fields: [branchId], references: [id])
+  createdById   String?
+  createdBy     User?    @relation("AggregatorCreator", fields: [createdById], references: [id])
+  orders        Order[]
+  webhookLogs   AggregatorWebhookLog[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([branchId])
+}
+
+/// كل request جاي من aggregator بنسجله هنا، سواء نجح ولا فشل.
+/// مفيد جداً للـ debugging لما يبقى فيه webhook مش شغّال — نشوف الـ payload الفعلي
+/// والـ headers والـ error message.
+model AggregatorWebhookLog {
+  id               String   @id @default(uuid())
+  aggregatorId     String?
+  aggregator       Aggregator? @relation(fields: [aggregatorId], references: [id])
+  /// الـ code اللي جاي في الـ URL — حتى لو الـ aggregator مش موجود في الـ DB
+  /// بنسجل الـ request عشان نعرف إن حد بيبعت لنامن غير ما يكون معمول له setup
+  aggregatorCode   String
+  /// JSON payload (stringified)
+  payload          String
+  /// JSON of the request headers (for debugging auth/signature issues)
+  headers          String?
+  /// 'RECEIVED' | 'PROCESSED' | 'FAILED' | 'IGNORED' (duplicate)
+  status           String   @default("RECEIVED")
+  /// لو الـ request اتحول لأوردر — الـ order id
+  orderId          String?
+  order            Order?   @relation(fields: [orderId], references: [id])
+  /// External order ID extracted from the payload (if we could find it)
+  externalOrderId  String?
+  /// Error message if status=FAILED
+  error            String?
+  /// كم استغرق المعالجة
+  processingMs     Int?
+  /// IP address (for IP allowlisting later)
+  ip               String?
+  createdAt        DateTime @default(now())
+
+  @@index([aggregatorId, createdAt])
+  @@index([status])
+  @@index([externalOrderId])
+  @@index([createdAt])
+}

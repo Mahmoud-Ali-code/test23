@@ -1,0 +1,40 @@
+🍖 أبو الزلف - Restaurant POS — Customer Test Access
+=====================================================
+
+PUBLIC URL:
+  https://freely-prisoner-testament-maintenance.trycloudflare.com
+
+LOGIN CREDENTIALS (4 demo accounts):
+  👑 Admin    admin@abo-zoelf.com    / admin123
+  💰 Cashier  cashier@abo-zoelf.com  / cashier123
+  🍳 Kitchen  kitchen@abo-zoelf.com  / kitchen123
+  📋 Manager  manager@abo-zoelf.com  / admin123
+
+WHAT TO TRY:
+  • /login                          — login with one of the 4 accounts above
+  • /pos                            — Cashier UI (add items, choose table, pay)
+  • /kitchen                        — Live Kitchen Display (orders refresh every 5s)
+  • /dashboard                      — Sales analytics
+  • /orders                         — Order history with PDF/Excel export
+  • /inventory                      — Stock levels (auto-deducts on order)
+  • /shifts                         — Open/close a shift, view X/Z reports
+  • /reports                        — Sales reports
+  • /suppliers                      — Suppliers & invoices
+  • /aggregators                    — Delivery aggregator integration
+  • /settings                       — Printer, tax, business rules
+
+NOTES:
+  • The red "TEST DEMO" bar at the top means this is a sandbox — feel free to break things.
+  • Database was reset to a clean state for your test (5 categories, 90 products, 4 tables).
+  • All Arabic text uses Cairo font; switch language by changing the URL locale if needed.
+  • Works on phone too — open the URL on your mobile, the UI is fully responsive.
+
+IF THE URL STOPS WORKING:
+  • The tunnel URL changes when the server restarts.
+  • Ping the developer for a fresh URL.
+
+WHAT WE NEED FROM YOU:
+  • Any bug / weird behavior you see
+  • Missing features you expected
+  • Anything confusing in the UI
+  • Whether the workflow matches how your restaurant actually runs
